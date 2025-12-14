@@ -108,3 +108,66 @@ Located in `train_model/`:
 The codebase handles BioPython API changes:
 - `blosum62` import from either `Bio.SubsMat.MatrixInfo` (old) or `Bio.Align.substitution_matrices` (new)
 - `three_to_one` function compatibility layer in `spartap_features.py`
+
+## Known Issues & Limitations
+
+### sklearn Version Incompatibility
+The pre-trained models (`.sav` files) were created with **scikit-learn 0.22**. Modern sklearn versions (1.0+) cannot load them due to internal tree structure changes. Either:
+- Use `scikit-learn==0.22` (recommended for prediction)
+- Retrain models with current sklearn version using `train_model/` pipeline
+
+### DSSP Failures
+DSSP may fail on certain residues (common with non-standard residues or missing atoms). These residues are skipped during feature extraction. Watch for "DSSP failed on..." messages.
+
+### External Dependencies
+- BLAST and mTM-align executables must be accessible (bundled in `bins/`)
+- `reduce` must be in PATH for hydrogen addition
+- `pdb2pqr30` required for pH-dependent protonation
+
+## Code Patterns
+
+### File Structure
+| File | Role |
+|------|------|
+| `CSpred.py` | Main entry point, CLI interface |
+| `ucbshifty.py` | UCBShift-Y module (sequence/structure alignment) |
+| `spartap_features.py` | Feature extraction from PDB files |
+| `data_prep_functions.py` | Feature preprocessing, column definitions |
+| `toolbox.py` | Utility functions, constants (ATOMS, protein_dict) |
+| `save_pdb.py` | PDB file I/O utilities |
+| `trainer.py` | Model training utilities |
+
+### Important Global Constants
+```python
+toolbox.ATOMS  # 47 atom types for prediction
+toolbox.protein_dict  # 3-letter → 1-letter AA mapping
+toolbox.protein_dict_reverse  # 1-letter → 3-letter AA mapping
+ucbshifty.EXTERNAL_MAPPINGS  # Non-standard residue mappings
+```
+
+### Random Coil Reference Values
+Two sets of random coil values in `ucbshifty.py`:
+- `randcoil_ala`: Standard reference (residue followed by Ala)
+- `randcoil_pro`: For residues followed by Proline
+
+## Development Notes
+
+### Testing Predictions
+```bash
+# Quick import test (BioPython compatibility)
+python3 -c "from spartap_features import PDB_SPARTAp_DataReader; print('OK')"
+
+# Feature extraction only (no sklearn)
+python3 -c "from spartap_features import PDB_SPARTAp_DataReader; r = PDB_SPARTAp_DataReader(); print('Feature reader OK')"
+```
+
+### Regex Patterns
+All regex in `toolbox.py` use raw strings (`r"..."`) to avoid escape sequence warnings in Python 3.12+.
+
+## Git Workflow
+
+This is a fork from THGLab/CSpred. Remote configuration:
+- `origin`: THGLab/CSpred (upstream, read-only)
+- `fork`: ChadResynant/CSpred (your fork, read-write)
+
+Push changes to fork: `git push fork SideChain`
