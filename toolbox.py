@@ -251,15 +251,15 @@ def get_pH(shift_file_path,default=5):
     '''
     with open(shift_file_path) as f:
         data=f.read()
-    regex=re.compile("pH.*\d+.*")
+    regex=re.compile(r"pH.*\d+.*")
     pH_line=regex.search(data)
     if pH_line is None:
         return default
     else:
         pH_line=pH_line.group()
-        digit_re=re.compile("\d+\.\d+")
+        digit_re=re.compile(r"\d+\.\d+")
         candidate_numbers=digit_re.findall(pH_line)
-        int_re=re.compile(" \d{1,2} ")
+        int_re=re.compile(r" \d{1,2} ")
         candidate_numbers.extend(int_re.findall(pH_line))
         if len(candidate_numbers)==0:
             return default
@@ -270,13 +270,13 @@ def get_pH(shift_file_path,default=5):
 def get_res(file):
     with open(file) as f:
         data=f.read()
-    regex=re.compile("RESOLUTION.*\d+\.\d+.*ANGSTROMS.")
+    regex=re.compile(r"RESOLUTION.*\d+\.\d+.*ANGSTROMS.")
     resolution_line=regex.search(data)
     if resolution_line is None:
         return None
     else:
         resolution_line=resolution_line.group()
-    digit_re=re.compile("\d+\.\d+")
+    digit_re=re.compile(r"\d+\.\d+")
     resolution=digit_re.search(resolution_line)
     if resolution is None:
         return None
