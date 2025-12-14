@@ -1,0 +1,13 @@
+name: ucbshift
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.8
+  - numpy=1.19
+  - pandas=1.1
+  - scikit-learn=0.22
+  - biopython=1.74
+  - joblib=0.17
+  - matplotlib=3.3
+  - pip
