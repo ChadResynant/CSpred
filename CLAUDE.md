@@ -116,6 +116,9 @@ The pre-trained models (`.sav` files) were created with **scikit-learn 0.22**. M
 - Use `scikit-learn==0.22` (recommended for prediction)
 - Retrain models with current sklearn version using `train_model/` pipeline
 
+### No GPU/MPS Acceleration
+UCBShift uses scikit-learn's ensemble tree methods (ExtraTreesRegressor, RandomForestRegressor), which are **CPU-only**. Apple Silicon MPS and NVIDIA CUDA do not accelerate these algorithms. The `get_free_gpu()` function in toolbox.py returns None on Mac systems.
+
 ### DSSP Failures
 DSSP may fail on certain residues (common with non-standard residues or missing atoms). These residues are skipped during feature extraction. Watch for "DSSP failed on..." messages.
 

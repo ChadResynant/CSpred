@@ -285,12 +285,21 @@ def get_res(file):
     return resolution
     
 def get_free_gpu():
-    gpu_stats = subprocess.check_output(["nvidia-smi", "--format=csv", "--query-gpu=memory.used,memory.free"])
-    gpu_df = pd.read_csv(StringIO(gpu_stats.decode("utf-8").replace("MiB","")),
-                         names=['memory.used', 'memory.free'],
-                         skiprows=1)
-    gpu_df["usage"]=gpu_df["memory.free"]/(gpu_df["memory.used"]+gpu_df["memory.free"])
-    idx = gpu_df['usage'].idxmax()
-    if gpu_df.loc[idx,"usage"]<0.1:
-        idx=None
-    return idx
+    """
+    Find the GPU with most free memory (NVIDIA only).
+    Returns None on Mac/non-NVIDIA systems since UCBShift uses
+    scikit-learn which is CPU-only.
+    """
+    try:
+        gpu_stats = subprocess.check_output(["nvidia-smi", "--format=csv", "--query-gpu=memory.used,memory.free"])
+        gpu_df = pd.read_csv(StringIO(gpu_stats.decode("utf-8").replace("MiB","")),
+                             names=['memory.used', 'memory.free'],
+                             skiprows=1)
+        gpu_df["usage"]=gpu_df["memory.free"]/(gpu_df["memory.used"]+gpu_df["memory.free"])
+        idx = gpu_df['usage'].idxmax()
+        if gpu_df.loc[idx,"usage"]<0.1:
+            idx=None
+        return idx
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # nvidia-smi not available (Mac, non-NVIDIA Linux, etc.)
+        return None
