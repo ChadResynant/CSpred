@@ -16,14 +16,27 @@ import pandas as pd
 import math
 from Bio import PDB
 from Bio.PDB.PDBParser import PDBParser
-from Bio.SubsMat.MatrixInfo import blosum62
+try:
+    from Bio.SubsMat.MatrixInfo import blosum62
+except ImportError:
+    # BioPython >= 1.80 uses new API
+    from Bio.Align import substitution_matrices
+    blosum62 = substitution_matrices.load("BLOSUM62")
 from Bio.SeqUtils import IUPACData
 import warnings
 from Bio import BiopythonWarning
 warnings.simplefilter('ignore', BiopythonWarning)
 import numpy as np
 
-
+# BioPython compatibility: three_to_one was removed in BioPython 1.80+
+try:
+    _three_to_one = PDB.Polypeptide.three_to_one
+except AttributeError:
+    from Bio.PDB.Polypeptide import protein_letters_3to1
+    def _three_to_one(resname):
+        return protein_letters_3to1.get(resname, 'X')
+# Monkey-patch for compatibility
+PDB.Polypeptide.three_to_one = _three_to_one
 
 atom_names = ['C', 'CA', 'CB', 'CD', 'CD1', 'CD2', 'CE', 'CE1', 'CE3', 'CE2', 'CG', 'CG1', 'CG2', 'CH2', 'CZ', 'CZ2', 'CZ3', 
 'H', 'HA', 'HB', 'HB2', 'HB3', 'HD1', 'HD2', 'HD21', 'HD22', 'HD3', 'HE', 'HE1', 'HE2', 'HE3', 'HE21', 'HE22', 'HG', 'HG1', 'HG12', 'HG13', 'HG2', 'HG3', 'HH2', 'HZ', 'HZ2', 'HZ3', 
@@ -486,8 +499,30 @@ class PDB_SPARTAp_DataReader(BaseDataReader):
 
         # First need to convert blosum62 dictionary to 3-letter codes
         cap_1to3 = dict((i, j.upper()) for i, j in IUPACData.protein_letters_1to3.items())
-        std_blosum62 = dict([(cap_1to3[i[0]], cap_1to3[i[1]]), j] for i,j in blosum62.items()
-        if i[0] not in ['Z', 'B', 'X'] and i[1] not in ['Z', 'B', 'X'])
+
+        # BioPython compatibility: handle both old dict format and new Array format
+        std_blosum62 = {}
+        standard_aa = 'ACDEFGHIKLMNPQRSTVWY'
+        if hasattr(blosum62, 'items'):
+            # Old format: dict with tuple keys like {('A', 'A'): 4, ...}
+            for key, val in blosum62.items():
+                if key[0] in standard_aa and key[1] in standard_aa:
+                    aa1_3 = cap_1to3.get(key[0])
+                    aa2_3 = cap_1to3.get(key[1])
+                    if aa1_3 and aa2_3:
+                        std_blosum62[(aa1_3, aa2_3)] = val
+        else:
+            # New format: Array object indexed by amino acid letters
+            for aa1 in standard_aa:
+                for aa2 in standard_aa:
+                    try:
+                        val = blosum62[aa1, aa2]
+                        aa1_3 = cap_1to3.get(aa1)
+                        aa2_3 = cap_1to3.get(aa2)
+                        if aa1_3 and aa2_3:
+                            std_blosum62[(aa1_3, aa2_3)] = val
+                    except (KeyError, IndexError):
+                        pass
 
 
         res_name = self._fix_res_name(res_obj.resname)

@@ -10,7 +10,12 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from Bio import SeqIO
 from Bio import Align
-from Bio.SubsMat.MatrixInfo import blosum62
+try:
+    from Bio.SubsMat.MatrixInfo import blosum62
+except ImportError:
+    # BioPython >= 1.80 uses new API
+    from Bio.Align import substitution_matrices
+    blosum62 = substitution_matrices.load("BLOSUM62")
 from save_pdb import PDBSaver
 import subprocess
 import os
