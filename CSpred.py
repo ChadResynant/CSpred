@@ -4,6 +4,30 @@
 # Author: Jie Li
 # Date created: Sep 20, 2019
 
+import sys
+if sys.version_info.major < 3 or sys.version_info.major == 3 and sys.version_info.minor < 5:
+    raise ValueError("Python >= 3.5 required")
+
+# Version checks for critical dependencies
+import sklearn
+import Bio
+_sklearn_version = tuple(map(int, sklearn.__version__.split('.')[:2]))
+_bio_version = tuple(map(int, Bio.__version__.split('.')[:2]))
+if _sklearn_version != (0, 22):
+    import warnings
+    warnings.warn(
+        f"scikit-learn {sklearn.__version__} detected. Models were trained with 0.22. "
+        "Predictions may fail or be inaccurate. Install with: pip install scikit-learn==0.22",
+        UserWarning
+    )
+if _bio_version != (1, 74):
+    import warnings
+    warnings.warn(
+        f"Biopython {Bio.__version__} detected. This code requires 1.74 for BLOSUM62 compatibility. "
+        "Install with: pip install biopython==1.74",
+        UserWarning
+    )
+
 from spartap_features import PDB_SPARTAp_DataReader
 from data_prep_functions import *
 import ucbshifty
@@ -13,10 +37,6 @@ import os
 import pandas as pd
 import argparse
 import multiprocessing
-# import warnings
-import sys
-if sys.version_info.major < 3 or sys.version_info.major == 3 and sys.version_info.minor < 5:
-    raise ValueError("Python >= 3.5 required")
 
 
 # Suppress Setting With Copy warnings
@@ -24,6 +44,25 @@ pd.options.mode.chained_assignment = None
 
 SCRIPT_PATH = os.path.dirname(os.path.realpath(__file__))
 ML_MODEL_PATH = SCRIPT_PATH + "/models/"
+
+# Model cache to avoid repeated loading (significant speedup in batch mode)
+_MODEL_CACHE = {}
+
+def _load_model(model_path):
+    """Load a model with caching to avoid repeated disk reads."""
+    if model_path not in _MODEL_CACHE:
+        _MODEL_CACHE[model_path] = joblib.load(model_path)
+    return _MODEL_CACHE[model_path]
+
+def preload_models():
+    """Preload all models into cache. Call before batch processing for best performance."""
+    if not os.path.isdir(ML_MODEL_PATH):
+        raise ValueError("models not installed in {}".format(ML_MODEL_PATH))
+    for atom in toolbox.ATOMS:
+        for level in ["R0", "R1", "R2"]:
+            model_path = ML_MODEL_PATH + "%s_%s.sav" % (atom, level)
+            if os.path.exists(model_path):
+                _load_model(model_path)
 
 def build_input(pdb_file_name, pH=5, rcfeats=True, hse=True, hbrad=[5.0] * 3):
     '''
@@ -122,12 +161,12 @@ def calc_sing_pdb(pdb_file_name,pH=5,TP=True,TP_pred=None,ML=True,test=False):
             print("Calculating UCBShift-X predictions for %s ..." % atom)
             # Predictions for each atom
             atom_feats = prepare_data_for_atom(feats, atom)
-            r0 = joblib.load(ML_MODEL_PATH + "%s_R0.sav" % atom)
+            r0 = _load_model(ML_MODEL_PATH + "%s_R0.sav" % atom)
             r0_pred = r0.predict(atom_feats.values)
 
             feats_r1 = atom_feats.copy()
             feats_r1["R0_PRED"] = r0_pred
-            r1 = joblib.load(ML_MODEL_PATH + "%s_R1.sav" % atom)
+            r1 = _load_model(ML_MODEL_PATH + "%s_R1.sav" % atom)
             r1_pred = r1.predict(feats_r1.values)
             # Write ML predictions
             result[atom+"_X"] = r1_pred + rcoils["RCOIL_"+atom]
@@ -151,7 +190,7 @@ def calc_sing_pdb(pdb_file_name,pH=5,TP=True,TP_pred=None,ML=True,test=False):
                 valid_feats_r2 = feats_r2.drop(["RESNAME","RESNUM","RESNAME_TP"], axis=1)[valid]
                 r2_pred = r1_pred.copy()
                 if len(valid_feats_r2):
-                    r2 = joblib.load(ML_MODEL_PATH + "%s_R2.sav" % atom)
+                    r2 = _load_model(ML_MODEL_PATH + "%s_R2.sav" % atom)
                     r2_pred_valid = r2.predict(valid_feats_r2.values)
                     r2_pred[valid] = r2_pred_valid
                 # Write final predictions
@@ -178,6 +217,11 @@ if __name__ == "__main__":
             raise ValueError("Directory {} specified by models does not exists".format(args.models))
         ML_MODEL_PATH = args.models
  
+    # Preload models for faster batch processing
+    if not args.shifty_only:
+        print("Loading models...")
+        preload_models()
+
     if not args.batch:
         preds = calc_sing_pdb(args.input, args.pH, TP=not args.shiftx_only, ML=not args.shifty_only, test=args.test)
         preds.to_csv(args.output, index=None)
@@ -201,6 +245,7 @@ if __name__ == "__main__":
             if SAVE_PREFIX[-1] != "/":
                 SAVE_PREFIX = SAVE_PREFIX + "/"
 
+        # Process in batch (sequential for now due to model memory sharing issues with multiprocessing)
         for idx, item in enumerate(inputs):
             preds = calc_sing_pdb(item[0], item[1], TP=not args.shiftx_only, ML=not args.shifty_only, test=args.test)
             preds.to_csv(SAVE_PREFIX + os.path.basename(item[0]).replace(".pdb", ".csv"), index=None)

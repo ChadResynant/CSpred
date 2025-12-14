@@ -28,17 +28,28 @@ BLAST_DEFAULT_EXE=SCRIPT_PATH+"/bins/ncbi-blast-2.9.0+/bin/blastp"
 MTM_DEFAULT_EXE=SCRIPT_PATH+"/bins/mTM-align/mTM-align"
 os.environ["BLASTDB"]=SCRIPT_PATH+"/refDB/"  # Set the refDB position
 
-# Do checks beforehand to make sure the two alignment programs: BLAST and mTM-align are installed and configured correctly
-# try:
-#     check_result=subprocess.check_output(["which","blastp"])
-# except:
-#     check_result=""
-# assert len(check_result)!=0,"Cannot find BLAST program! Please make sure BLAST is correctly configured."
-# try:
-#     check_result=subprocess.check_output(["which","mTM-align"])
-# except:
-#     check_result=""
-# assert len(check_result)!=0,"Cannot find mTM-align program! Please make sure mTM-align is correctly configured."
+# Validate external programs are available
+def _check_executable(path, name):
+    """Check if an executable exists and is runnable."""
+    if os.path.isfile(path) and os.access(path, os.X_OK):
+        return True
+    # Try system PATH as fallback
+    try:
+        subprocess.check_output(["which", name], stderr=subprocess.DEVNULL)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+if not _check_executable(BLAST_DEFAULT_EXE, "blastp"):
+    raise RuntimeError(
+        f"BLAST not found at {BLAST_DEFAULT_EXE}\n"
+        "Install BLAST 2.9.0+ or ensure bins/ncbi-blast-2.9.0+/bin/blastp exists."
+    )
+if not _check_executable(MTM_DEFAULT_EXE, "mTM-align"):
+    raise RuntimeError(
+        f"mTM-align not found at {MTM_DEFAULT_EXE}\n"
+        "Ensure bins/mTM-align/mTM-align exists and is executable."
+    )
 
 # Decompress refDB pdb files if they don't exist
 if not os.path.exists(SCRIPT_PATH+"/refDB/pdbs/"):

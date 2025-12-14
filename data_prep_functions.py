@@ -184,31 +184,7 @@ non_numerical_cols=['3_10_HELIX_SS_i',"A_HELIX_SS_i","BEND_SS_i","B_BRIDGE_SS_i"
 cols_notinsp = dssp_cols + hse_cols + ext_seq_cols
 
 
-# Now some stuff to read in data
-
-# Read in ShiftX2 data
-# Athena -- 
-try:
-    train_sx2 = pd.read_csv('/home/bennett/Documents/DataSets/bmrb_clean/clean_rings/train_shiftx2_clean_rings.csv')
-    test_sx2 = pd.read_csv('/home/bennett/Documents/DataSets/bmrb_clean/clean_rings/test_shiftx2_clean_rings.csv')
-except FileNotFoundError:
-    pass
-# Hermes
-try:
-    train_sx2 = pd.read_csv('/home/kochise/data/shiftx2/clean_rings/train_shiftx2_clean_rings.csv')
-    test_sx2 = pd.read_csv('/home/kochise/data/shiftx2/clean_rings/test_shiftx2_clean_rings.csv')
-except FileNotFoundError:
-    pass
-# Office
-try:
-#    train_sx2 = pd.read_csv('/Users/kcbennett/Documents/data/ShiftX2/bmrb_clean/train_shiftx2_clean_rings.csv')
-#    test_sx2 = pd.read_csv('/Users/kcbennett/Documents/data/ShiftX2/bmrb_clean/test_shiftx2_clean_rings.csv')
-    shiftx2_train = pd.read_csv('/Users/kcbennett/Documents/data/ShiftX2/sx2train_dssp.csv')
-    shiftx2_test = pd.read_csv('/Users/kcbennett/Documents/data/ShiftX2/sx2test_dssp.csv')
-except FileNotFoundError:
-    pass
-
-# Need to write a function to get targets as differences between raw shifts and the
+# Function to get targets as differences between raw shifts and the
 # random coil and ring current values
 def diff_targets(data, rings=False, coils=True, drop_cols=True):
     '''Function that replaces the shifts column with the difference between the raw
