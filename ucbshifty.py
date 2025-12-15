@@ -10,7 +10,18 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from Bio import SeqIO
 from Bio import Align
-from Bio.SubsMat.MatrixInfo import blosum62
+try:
+    from Bio.SubsMat.MatrixInfo import blosum62
+    _blosum62_aligner_matrix = blosum62  # Old Biopython uses dict
+except ImportError:
+    # Biopython >= 1.80 moved BLOSUM62
+    from Bio.Align import substitution_matrices
+    _blosum62_aligner_matrix = substitution_matrices.load("BLOSUM62")
+    # Also create dict format for other code that needs it
+    blosum62 = {}
+    for i, aa1 in enumerate(_blosum62_aligner_matrix.alphabet):
+        for j, aa2 in enumerate(_blosum62_aligner_matrix.alphabet):
+            blosum62[(aa1, aa2)] = _blosum62_aligner_matrix[i, j]
 from save_pdb import PDBSaver
 import subprocess
 import os
@@ -25,6 +36,7 @@ DEBUG=False
 GLOBAL_TEST_CUTOFF=0.99
 SCRIPT_PATH=os.path.dirname(os.path.realpath(__file__))
 BLAST_DEFAULT_EXE=SCRIPT_PATH+"/bins/ncbi-blast-2.9.0+/bin/blastp"
+DIAMOND_DEFAULT_EXE=SCRIPT_PATH+"/bins/diamond"
 MTM_DEFAULT_EXE=SCRIPT_PATH+"/bins/mTM-align/mTM-align"
 os.environ["BLASTDB"]=SCRIPT_PATH+"/refDB/"  # Set the refDB position
 
@@ -40,10 +52,22 @@ def _check_executable(path, name):
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
 
-if not _check_executable(BLAST_DEFAULT_EXE, "blastp"):
+# Check for DIAMOND (much faster alternative to BLAST)
+DIAMOND_DB = SCRIPT_PATH + "/refDB/refDB.dmnd"
+USE_DIAMOND = (
+    _check_executable(DIAMOND_DEFAULT_EXE, "diamond") and
+    os.path.exists(DIAMOND_DB)
+)
+if USE_DIAMOND:
+    print("Using DIAMOND for sequence search (100x faster than BLAST)")
+
+# Fall back to BLAST if DIAMOND not available
+if not USE_DIAMOND and not _check_executable(BLAST_DEFAULT_EXE, "blastp"):
     raise RuntimeError(
-        f"BLAST not found at {BLAST_DEFAULT_EXE}\n"
-        "Install BLAST 2.9.0+ or ensure bins/ncbi-blast-2.9.0+/bin/blastp exists."
+        f"Neither DIAMOND nor BLAST found.\n"
+        f"DIAMOND: {DIAMOND_DEFAULT_EXE} (preferred, 100x faster)\n"
+        f"BLAST: {BLAST_DEFAULT_EXE}\n"
+        "Install one of these tools to enable UCBShift-Y."
     )
 if not _check_executable(MTM_DEFAULT_EXE, "mTM-align"):
     raise RuntimeError(
@@ -221,15 +245,94 @@ class blast_result:
         self.coverage=self.Lmatch/max(self.Tmatch,len_total)
 
 
+def blast_diamond(seq, db_name=None, cleaning=True, working_dir=None):
+    '''
+    Execute a DIAMOND query (100x faster than BLAST) and return results.
+
+    seq = the query sequence (type: Bio.Seq.Seq) or the path to the fasta file (type: str)
+    db_name = the DIAMOND database path (default: refDB/refDB.dmnd)
+    cleaning = if true, clean the intermediate files
+    working_dir = a folder to store the intermediate results
+    '''
+    if db_name is None:
+        db_name = DIAMOND_DB
+
+    if working_dir is None:
+        working_dir = "diamond/"
+    if os.path.exists(working_dir):
+        shutil.rmtree(working_dir)
+    os.mkdir(working_dir)
+
+    # Prepare query FASTA
+    if type(seq) is str:
+        fasta_name = working_dir + os.path.split(seq)[-1]
+        shutil.copy(seq, fasta_name)
+        # Read sequence length
+        with open(fasta_name) as f:
+            seq_len = sum(len(line.strip()) for line in f if not line.startswith('>'))
+    elif type(seq) is Bio.Seq.Seq:
+        fasta_name = working_dir + "query.fasta"
+        record = SeqRecord(seq, id="query", description="")
+        with open(fasta_name, "w") as f:
+            f.write(record.format("fasta"))
+        seq_len = len(seq)
+
+    # Run DIAMOND blastp
+    out_file = working_dir + "diamond.tsv"
+    cmd = (
+        f"{DIAMOND_DEFAULT_EXE} blastp -d {db_name} -q {fasta_name} -o {out_file} "
+        f"--very-sensitive --outfmt 6 qseqid sseqid pident length mismatch gapopen "
+        f"qstart qend sstart send evalue bitscore > /dev/null 2>&1"
+    )
+    os.system(cmd)
+
+    # Parse results
+    results = {}
+    if os.path.exists(out_file):
+        with open(out_file) as f:
+            for line in f:
+                parts = line.strip().split('\t')
+                if len(parts) < 12:
+                    continue
+
+                target = parts[1]
+                # Skip if we already have a hit for this target (keep first/best)
+                if target in results:
+                    continue
+
+                result = blast_result()
+                result.target_name = target
+                result.identity = float(parts[2])
+                result.Lmatch = int(parts[3])
+                result.Tmatch = int(parts[3])  # Alignment length
+                result.evalue = float(parts[10])
+                result.bit_score = float(parts[11])
+                result.coverage = result.Lmatch / max(result.Tmatch, seq_len)
+
+                results[target] = result
+
+    if cleaning:
+        shutil.rmtree(working_dir)
+
+    return results
+
+
 def blast(seq,db_name="refDB.blastdb",cleaning=True,return_aligned_seq=False,working_dir=None):
     '''
-    Execute a blast query on the sequence and return the blast results
+    Execute a blast query on the sequence and return the blast results.
+    Uses DIAMOND if available (100x faster), falls back to BLAST.
+
     seq = the query sequence (type: Bio.Seq.Seq) or the path to the fasta file (type: str)
     db_name = the name of blast database
     cleaning = if true, clean the files and folders generated by executing the blast program
     return_aligned_seq = whether include the aligned sequences in the blast_result
     working_dir = a folder to store the intermediate results
     '''
+    # Use DIAMOND if available (much faster)
+    if USE_DIAMOND and not return_aligned_seq:
+        return blast_diamond(seq, cleaning=cleaning, working_dir=working_dir)
+
+    # Fall back to BLAST
     if working_dir is None:
         working_dir="blast/"
     if os.path.exists(working_dir):
@@ -376,10 +479,23 @@ def Needleman_Wunsch_alignment(seq1,seq2):
     aligner=Align.PairwiseAligner()
     aligner.open_gap_score=-10
     aligner.extend_gap_score=-0.5
-    aligner.substitution_matrix=blosum62
+    aligner.substitution_matrix=_blosum62_aligner_matrix
     alignment=aligner.align(seq1,seq2)[0]
     alignment_info=alignment.__str__().split("\n")
-    aligned1,aligned2=alignment_info[0],alignment_info[2]
+    # Handle both old and new Biopython alignment string formats
+    # New format: "target  0 MKWVT... 40" with labels and coordinates
+    # Old format: "MKWVT..." just sequences
+    line0 = alignment_info[0]
+    line2 = alignment_info[2]
+    if line0.startswith("target") or line0.startswith("query"):
+        # New Biopython format - extract sequence between coordinates
+        parts0 = line0.split()
+        parts2 = line2.split()
+        aligned1 = parts0[2] if len(parts0) > 2 else ""
+        aligned2 = parts2[2] if len(parts2) > 2 else ""
+    else:
+        # Old Biopython format
+        aligned1, aligned2 = line0, line2
     if missing is None:
         final1=aligned1
         final2=aligned2
@@ -393,7 +509,7 @@ def Needleman_Wunsch_alignment(seq1,seq2):
                 final1_temp+="-"
                 final2_temp+="-"
             else:
-                while aligned1[j]=="-" and j<len(aligned1):
+                while j<len(aligned1) and aligned1[j]=="-":
                     final1_temp+=aligned1[j]
                     final2_temp+=aligned2[j]
                     j+=1
@@ -464,7 +580,10 @@ def assign_aligned_shifts(source_seq,target_seq,target_id,refDB,strict):
         if target_seq[i]=="-":
             query_ref_pdb_shifts.append({})
         else:
-            query_ref_pdb_shifts.append(refDB_pdb_shifts[n])
+            if n < len(refDB_pdb_shifts):
+                query_ref_pdb_shifts.append(refDB_pdb_shifts[n])
+            else:
+                query_ref_pdb_shifts.append({})
             n+=1
     results=[]
     n=0

@@ -2,3 +2,5 @@ models/*
 __pycache__/*
 
 refDB/pdbs/*
+refDB/*.dmnd
+bins/diamond

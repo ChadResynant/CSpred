@@ -16,7 +16,16 @@ import pandas as pd
 import math
 from Bio import PDB
 from Bio.PDB.PDBParser import PDBParser
-from Bio.SubsMat.MatrixInfo import blosum62
+try:
+    from Bio.SubsMat.MatrixInfo import blosum62
+except ImportError:
+    # Biopython >= 1.80 moved BLOSUM62
+    from Bio.Align import substitution_matrices
+    _blosum62_matrix = substitution_matrices.load("BLOSUM62")
+    blosum62 = {}
+    for i, aa1 in enumerate(_blosum62_matrix.alphabet):
+        for j, aa2 in enumerate(_blosum62_matrix.alphabet):
+            blosum62[(aa1, aa2)] = _blosum62_matrix[i, j]
 from Bio.SeqUtils import IUPACData
 import warnings
 from Bio import BiopythonWarning

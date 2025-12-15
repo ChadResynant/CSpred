@@ -220,3 +220,52 @@ The `refDB/` directory contains:
 - BLAST databases for sequence search
 
 Reference proteins are from BMRB with experimentally determined shifts.
+
+## Performance Optimization
+
+### ONNX GPU Acceleration
+
+The ML inference pipeline supports ONNX Runtime for GPU-accelerated predictions. Convert sklearn models to ONNX format:
+
+```bash
+pip install onnx skl2onnx onnxruntime-gpu
+python scripts/convert_to_onnx.py --models-dir models/
+```
+
+GPU inference is used automatically when `.onnx` files exist alongside `.sav` files. Models are cached to avoid repeated loading.
+
+### DIAMOND for Faster Alignment
+
+DIAMOND provides ~100x faster protein alignment than BLAST for UCBShift-Y:
+
+```bash
+# Install DIAMOND (download from https://github.com/bbuchfink/diamond/releases)
+chmod +x bins/diamond
+
+# Build database (one-time)
+./scripts/build_diamond_db.sh
+```
+
+DIAMOND is used automatically when `bins/diamond` and `refDB/refDB.dmnd` exist. Falls back to BLAST otherwise.
+
+### Batch Processing with Multiprocessing
+
+For multiple PDB files, use batch mode with parallel workers:
+
+```bash
+python CSpred.py batch_list.txt -b -w 8 -o output_dir/
+```
+
+The `-w` flag controls the number of parallel workers. Each worker loads its own copy of the models (uses spawn context to avoid memory sharing issues).
+
+### Model Caching
+
+Models are automatically cached on first load via `_MODEL_CACHE`. For batch processing, call `preload_models()` before predictions to load all models upfront.
+
+### Performance Bottlenecks
+
+- **UCBShift-Y alignment (~60%)**: DIAMOND provides major improvement
+- **Feature extraction (~25%)**: Parallelized via batch multiprocessing
+- **ML inference (~10%)**: ONNX GPU provides modest improvement
+
+See `docs/GPU_OPTIMIZATION.md` for detailed optimization guide including PyTorch model retraining plans.

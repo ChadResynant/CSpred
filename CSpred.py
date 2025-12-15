@@ -37,6 +37,7 @@ import os
 import pandas as pd
 import argparse
 import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
 # Suppress Setting With Copy warnings
@@ -48,21 +49,96 @@ ML_MODEL_PATH = SCRIPT_PATH + "/models/"
 # Model cache to avoid repeated loading (significant speedup in batch mode)
 _MODEL_CACHE = {}
 
+# Check for ONNX Runtime GPU support
+_ONNX_AVAILABLE = False
+_ONNX_GPU = False
+try:
+    import onnxruntime as ort
+    _ONNX_AVAILABLE = True
+    _ONNX_GPU = 'CUDAExecutionProvider' in ort.get_available_providers()
+    if _ONNX_GPU:
+        print("ONNX Runtime GPU acceleration available")
+except ImportError:
+    pass
+
+
 def _load_model(model_path):
-    """Load a model with caching to avoid repeated disk reads."""
+    """Load a model with caching, preferring ONNX GPU if available."""
     if model_path not in _MODEL_CACHE:
-        _MODEL_CACHE[model_path] = joblib.load(model_path)
+        onnx_path = model_path.replace('.sav', '.onnx')
+
+        # Try ONNX first (faster, especially on GPU)
+        if _ONNX_AVAILABLE and os.path.exists(onnx_path):
+            try:
+                if _ONNX_GPU:
+                    providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+                else:
+                    providers = ['CPUExecutionProvider']
+                session = ort.InferenceSession(onnx_path, providers=providers)
+                _MODEL_CACHE[model_path] = ('onnx', session)
+                return _MODEL_CACHE[model_path]
+            except Exception as e:
+                print(f"Warning: Failed to load ONNX model {onnx_path}: {e}")
+
+        # Fall back to sklearn
+        _MODEL_CACHE[model_path] = ('sklearn', joblib.load(model_path))
+
     return _MODEL_CACHE[model_path]
+
+
+def _predict(model_tuple, features):
+    """Run prediction with either ONNX or sklearn model."""
+    model_type, model = model_tuple
+
+    if model_type == 'onnx':
+        input_name = model.get_inputs()[0].name
+        return model.run(None, {input_name: features.astype(np.float32)})[0].ravel()
+    else:
+        return model.predict(features).ravel()
+
 
 def preload_models():
     """Preload all models into cache. Call before batch processing for best performance."""
     if not os.path.isdir(ML_MODEL_PATH):
         raise ValueError("models not installed in {}".format(ML_MODEL_PATH))
+
+    onnx_count = 0
+    sklearn_count = 0
+
     for atom in toolbox.ATOMS:
         for level in ["R0", "R1", "R2"]:
             model_path = ML_MODEL_PATH + "%s_%s.sav" % (atom, level)
             if os.path.exists(model_path):
-                _load_model(model_path)
+                model_tuple = _load_model(model_path)
+                if model_tuple[0] == 'onnx':
+                    onnx_count += 1
+                else:
+                    sklearn_count += 1
+
+    if onnx_count > 0:
+        gpu_str = " (GPU)" if _ONNX_GPU else " (CPU)"
+        print(f"Loaded {onnx_count} ONNX{gpu_str} + {sklearn_count} sklearn models")
+
+
+def _batch_worker_init(models_path):
+    """Initialize worker process with models (called once per worker)."""
+    global ML_MODEL_PATH, _MODEL_CACHE
+    ML_MODEL_PATH = models_path
+    _MODEL_CACHE = {}
+    preload_models()
+
+
+def _batch_worker(args):
+    """Worker function for parallel batch processing."""
+    pdb_file, pH, use_tp, use_ml, test_mode, save_prefix = args
+    try:
+        preds = calc_sing_pdb(pdb_file, pH, TP=use_tp, ML=use_ml, test=test_mode)
+        output_file = save_prefix + os.path.basename(pdb_file).replace(".pdb", ".csv")
+        preds.to_csv(output_file, index=None)
+        return (pdb_file, True, None)
+    except Exception as e:
+        return (pdb_file, False, str(e))
+
 
 def build_input(pdb_file_name, pH=5, rcfeats=True, hse=True, hbrad=[5.0] * 3):
     '''
@@ -162,12 +238,12 @@ def calc_sing_pdb(pdb_file_name,pH=5,TP=True,TP_pred=None,ML=True,test=False):
             # Predictions for each atom
             atom_feats = prepare_data_for_atom(feats, atom)
             r0 = _load_model(ML_MODEL_PATH + "%s_R0.sav" % atom)
-            r0_pred = r0.predict(atom_feats.values)
+            r0_pred = _predict(r0, atom_feats.values)
 
             feats_r1 = atom_feats.copy()
             feats_r1["R0_PRED"] = r0_pred
             r1 = _load_model(ML_MODEL_PATH + "%s_R1.sav" % atom)
-            r1_pred = r1.predict(feats_r1.values)
+            r1_pred = _predict(r1, feats_r1.values)
             # Write ML predictions
             result[atom+"_X"] = r1_pred + rcoils["RCOIL_"+atom]
 
@@ -191,7 +267,7 @@ def calc_sing_pdb(pdb_file_name,pH=5,TP=True,TP_pred=None,ML=True,test=False):
                 r2_pred = r1_pred.copy()
                 if len(valid_feats_r2):
                     r2 = _load_model(ML_MODEL_PATH + "%s_R2.sav" % atom)
-                    r2_pred_valid = r2.predict(valid_feats_r2.values)
+                    r2_pred_valid = _predict(r2, valid_feats_r2.values)
                     r2_pred[valid] = r2_pred_valid
                 # Write final predictions
                 result[atom+"_UCBShift"] = r2_pred + rcoils["RCOIL_"+atom]
@@ -217,8 +293,8 @@ if __name__ == "__main__":
             raise ValueError("Directory {} specified by models does not exists".format(args.models))
         ML_MODEL_PATH = args.models
  
-    # Preload models for faster batch processing
-    if not args.shifty_only:
+    # Preload models for faster processing (except parallel batch mode - workers load their own)
+    if not args.shifty_only and not (args.batch and args.worker > 1):
         print("Loading models...")
         preload_models()
 
@@ -245,11 +321,38 @@ if __name__ == "__main__":
             if SAVE_PREFIX[-1] != "/":
                 SAVE_PREFIX = SAVE_PREFIX + "/"
 
-        # Process in batch (sequential for now due to model memory sharing issues with multiprocessing)
-        for idx, item in enumerate(inputs):
-            preds = calc_sing_pdb(item[0], item[1], TP=not args.shiftx_only, ML=not args.shifty_only, test=args.test)
-            preds.to_csv(SAVE_PREFIX + os.path.basename(item[0]).replace(".pdb", ".csv"), index=None)
-            print("Finished prediction for %s (%d/%d)" % (item[0], idx + 1, len(inputs)))    
+        # Process in batch with multiprocessing
+        num_workers = min(args.worker, len(inputs))
+        use_tp = not args.shiftx_only
+        use_ml = not args.shifty_only
+
+        if num_workers > 1 and len(inputs) > 1:
+            # Parallel processing with worker pool
+            print(f"Processing {len(inputs)} files with {num_workers} workers...")
+            work_items = [
+                (item[0], item[1], use_tp, use_ml, args.test, SAVE_PREFIX)
+                for item in inputs
+            ]
+
+            # Use spawn context to avoid fork issues with sklearn models
+            ctx = multiprocessing.get_context('spawn')
+            with ctx.Pool(num_workers, initializer=_batch_worker_init, initargs=(ML_MODEL_PATH,)) as pool:
+                results = pool.map(_batch_worker, work_items)
+
+            # Report results
+            success = sum(1 for _, ok, _ in results if ok)
+            failed = [(f, e) for f, ok, e in results if not ok]
+            print(f"Completed: {success}/{len(inputs)} files")
+            if failed:
+                print("Failed files:")
+                for f, e in failed:
+                    print(f"  {f}: {e}")
+        else:
+            # Sequential processing (single file or single worker)
+            for idx, item in enumerate(inputs):
+                preds = calc_sing_pdb(item[0], item[1], TP=use_tp, ML=use_ml, test=args.test)
+                preds.to_csv(SAVE_PREFIX + os.path.basename(item[0]).replace(".pdb", ".csv"), index=None)
+                print("Finished prediction for %s (%d/%d)" % (item[0], idx + 1, len(inputs)))    
     
     print("Complete!")
    

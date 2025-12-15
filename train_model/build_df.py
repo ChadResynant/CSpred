@@ -15,7 +15,16 @@ import pandas as pd
 import numpy as np
 import glob
 from Bio.SeqUtils import IUPACData
-from Bio.SubsMat.MatrixInfo import blosum62
+try:
+    from Bio.SubsMat.MatrixInfo import blosum62
+except ImportError:
+    # Biopython >= 1.80 moved BLOSUM62
+    from Bio.Align import substitution_matrices
+    _blosum62_matrix = substitution_matrices.load("BLOSUM62")
+    blosum62 = {}
+    for i, aa1 in enumerate(_blosum62_matrix.alphabet):
+        for j, aa2 in enumerate(_blosum62_matrix.alphabet):
+            blosum62[(aa1, aa2)] = _blosum62_matrix[i, j]
 from spartap_features import *
 import warnings
 from Bio import BiopythonWarning
