@@ -11,6 +11,29 @@ UCBShift (CSpred) is a protein NMR chemical shift predictor for backbone atoms (
 
 The combined UCBShift model achieves state-of-the-art accuracy by integrating both approaches.
 
+## Setup
+
+### Automated install (recommended)
+```bash
+# Creates venv at CSpred/venv, installs requirements, and symlinks external binaries
+bash install/create-virtual-environment.sh
+source venv/bin/activate
+```
+This downloads trained models from Dryad automatically if `models/` is absent.
+
+### Manual install
+```bash
+pip install -r requirements.txt   # pinned: sklearn 0.22, biopython 1.74, numpy 1.19, pandas 1.1
+# Then install external binaries: BLAST 2.9.0, mTM-align, DSSP (mkdssp)
+# and download models.tgz from Dryad → extract to models/
+```
+
+### Shell hygiene gate (before pushing)
+```bash
+./tools/ci/shell_hygiene_gate_hardmode.sh
+```
+Exit 0 = safe to push. This repo uses zero-tolerance shell hardening. See `SHELL_HARDENING.md`.
+
 ## Quick Start
 
 ### Prediction (Single PDB)
