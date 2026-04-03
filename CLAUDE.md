@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Governance Prerequisite (Non-Negotiable)
+
+**Before any work in this repository, read and comply with:** [`~/repos/governance/INDEX.md`](../governance/INDEX.md)
+
+All cross-repo contracts, policies, and enforcement gates in `~/repos/governance/` are binding. Repo-specific rules below may extend but never override governance contracts.
+
+
 ## Overview
 
 UCBShift (CSpred) is a protein NMR chemical shift predictor for backbone atoms (H, HA, C, CA, CB, N) in aqueous solution. It combines two prediction modules:
