@@ -4,3 +4,6 @@ __pycache__/*
 refDB/pdbs/*
 refDB/*.dmnd
 bins/diamond
+
+# Graft map cache — generated and published by Chad; contributors fetch a validated map.
+/graft/
